@@ -55,6 +55,19 @@ class CategoryViewTests(APITestCase):
         self.category.refresh_from_db()
         self.assertEqual(self.category.name, "Updated Category")
 
+    def test_partial_update(self):
+        """PATCH /api/categories/{id}/ で指定したフィールドのみが更新されること"""
+        response = self.client.patch(
+            reverse("category-detail", kwargs={"pk": self.category.id}),
+            {"name": "Partially Updated Category"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.category.refresh_from_db()
+        self.assertEqual(self.category.name, "Partially Updated Category")
+        # company を送らなくても、既存の値が維持されること
+        self.assertEqual(self.category.company_id, self.company.id)
+
     def test_destroy(self):
         """DELETE /api/categories/{id}/ でCategoryが削除されること"""
         response = self.client.delete(
@@ -166,4 +179,54 @@ class CategoryViewSecurityTests(APITestCase):
         self.assertNotEqual(
             response.data["created_at"], "2000-01-01T00:00:00Z"
         )
+
+    def test_partial_update_with_nonexistent_company_returns_400(self):
+        """PATCH /api/categories/{id}/ で存在しないcompany idを指定した場合、
+        外部キー制約違反(500)ではなく400が返ること
+        """
+        response = self.client.patch(
+            reverse("category-detail", kwargs={"pk": self.category.id}),
+            {"company": "00000000-0000-0000-0000-000000000000"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_partial_update_with_duplicate_name_returns_400(self):
+        """PATCH /api/categories/{id}/ で同一company内の別のcategoryと
+        company+nameが重複するように更新しようとした場合、400が返ること
+        """
+        other = Category.objects.create(
+            company=self.company, name="Other Category"
+        )
+        response = self.client.patch(
+            reverse("category-detail", kwargs={"pk": other.id}),
+            {"name": self.category.name},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_partial_update_without_changes_does_not_conflict_with_itself(self):
+        """PATCH /api/categories/{id}/ で自分自身と同じcompany+nameを送っても、
+        ユニーク制約違反(400)として誤って弾かれないこと
+        """
+        response = self.client.patch(
+            reverse("category-detail", kwargs={"pk": self.category.id}),
+            {"company": str(self.company.id), "name": self.category.name},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_partial_update_ignores_client_supplied_id(self):
+        """PATCH /api/categories/{id}/ でクライアントがidを偽装しても、
+        idが書き換わらないこと
+        """
+        forged_id = "22222222-2222-2222-2222-222222222222"
+        response = self.client.patch(
+            reverse("category-detail", kwargs={"pk": self.category.id}),
+            {"id": forged_id, "name": "PATCH偽装確認"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], str(self.category.id))
+        self.assertFalse(Category.objects.filter(id=forged_id).exists())
 
